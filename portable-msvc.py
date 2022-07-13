@@ -180,6 +180,7 @@ sdk_packages = [
   f"Windows SDK for Windows Store Apps Tools-x86_en-us.msi",
   # Windows SDK headers
   f"Windows SDK for Windows Store Apps Headers-x86_en-us.msi",
+  f"Windows SDK Desktop Headers {TARGET}-x86_en-us.msi",
   # Windows SDK libs
   f"Windows SDK for Windows Store Apps Libs-x86_en-us.msi",
   f"Windows SDK Desktop Libs {TARGET}-x86_en-us.msi",
