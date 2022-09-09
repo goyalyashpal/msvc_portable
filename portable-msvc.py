@@ -180,7 +180,7 @@ sdk_packages = [
   f"Windows SDK for Windows Store Apps Tools-x86_en-us.msi",
   # Windows SDK headers
   f"Windows SDK for Windows Store Apps Headers-x86_en-us.msi",
-  f"Windows SDK Desktop Headers {TARGET}-x86_en-us.msi",
+  f"Windows SDK Desktop Headers x86-x86_en-us.msi",
   # Windows SDK libs
   f"Windows SDK for Windows Store Apps Libs-x86_en-us.msi",
   f"Windows SDK Desktop Libs {TARGET}-x86_en-us.msi",
@@ -282,8 +282,7 @@ set INCLUDE=%MSVC_ROOT%\\include;%SDK_INCLUDE%\\ucrt;%SDK_INCLUDE%\\shared;%SDK_
 set LIB=%MSVC_ROOT%\\lib\\%MSVC_ARCH%;%SDK_LIBS%\\ucrt\\%SDK_ARCH%;%SDK_LIBS%\\um\\%SDK_ARCH%
 """
 
-with open(OUTPUT / "setup.bat", "w") as f:
-  print(SETUP, file=f)
+(OUTPUT / "setup.bat").write_text(SETUP)
 
 print(f"Total downloaded: {total_download>>20} MB")
 print("Done!")
