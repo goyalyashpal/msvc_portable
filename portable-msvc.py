@@ -227,20 +227,48 @@ msvcv = list((OUTPUT / "VC/Tools/MSVC").glob("*"))[0].name
 sdkv = list((OUTPUT / "Windows Kits/10/bin").glob("*"))[0].name
 
 
-# place debug CRT runtime into MSVC folder (not what real Visual Studio installer does... but is reasonable)
+# place debug CRT runtime files into MSVC folder (not what real Visual Studio installer does... but is reasonable)
 
-dst = str(OUTPUT / "VC/Tools/MSVC" / msvcv / f"bin/Host{HOST}/{TARGET}")
+dst = OUTPUT / "VC/Tools/MSVC" / msvcv / f"bin/Host{HOST}/{TARGET}"
 
-pkg = "microsoft.visualcpp.runtimedebug.14"
-dbg = packages[pkg][0]
-payload = first(dbg["payloads"], lambda p: p["fileName"] == "cab1.cab")
-try:
-  with tempfile.TemporaryFile(suffix=".cab", delete=False) as f:
-    data = download_progress(payload["url"], payload["sha256"], pkg, f)
-    total_download += len(data)
-  subprocess.check_call(["expand.exe", f.name, "-F:*", dst], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-finally:
-  os.unlink(f.name)
+with tempfile.TemporaryDirectory() as d:
+  d = Path(d)
+  pkg = "microsoft.visualcpp.runtimedebug.14"
+  dbg = first(packages[pkg], lambda p: p["chip"] == HOST)
+  for payload in dbg["payloads"]:
+    name = payload["fileName"]
+    with open(d / name, "wb") as f:
+      data = download_progress(payload["url"], payload["sha256"], f"{pkg}/{name}", f)
+      total_download += len(data)
+  msi = d / first(dbg["payloads"], lambda p: p["fileName"].endswith(".msi"))["fileName"]
+
+  with tempfile.TemporaryDirectory() as d2:
+    subprocess.check_call(["msiexec.exe", "/a", str(msi), "/quiet", "/qn", f"TARGETDIR={d2}"])
+    for f in first(Path(d2).glob("System*"), lambda x: True).iterdir():
+      f.replace(dst / f.name)
+
+# download DIA SDK and put msdia140.dll file into MSVC folder
+
+with tempfile.TemporaryDirectory() as d:
+  d = Path(d)
+  pkg = "microsoft.visualc.140.dia.sdk.msi"
+  dia = packages[pkg][0]
+  for payload in dia["payloads"]:
+    name = payload["fileName"]
+    with open(d / name, "wb") as f:
+      data = download_progress(payload["url"], payload["sha256"], f"{pkg}/{name}", f)
+      total_download += len(data)
+  msi = d / first(dia["payloads"], lambda p: p["fileName"].endswith(".msi"))["fileName"]
+
+  with tempfile.TemporaryDirectory() as d2:
+    subprocess.check_call(["msiexec.exe", "/a", str(msi), "/quiet", "/qn", f"TARGETDIR={d2}"])
+
+    if HOST == "x86": msdia = "msdia140.dll"
+    elif HOST == "x64": msdia = "amd64/msdia140.dll"
+    else: exit("unknown")
+
+    src = Path(d2) / "Program Files" / "Microsoft Visual Studio 14.0" / "DIA SDK" / "bin" / msdia
+    src.replace(dst / "msdia140.dll")
 
 
 ### cleanup
