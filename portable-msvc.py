@@ -286,6 +286,8 @@ for arch in ["x86", "x64", "arm", "arm64"]:
     shutil.rmtree(OUTPUT / "Windows Kits/10/bin" / sdkv / arch)
     shutil.rmtree(OUTPUT / "Windows Kits/10/Lib" / sdkv / "ucrt" / arch)
     shutil.rmtree(OUTPUT / "Windows Kits/10/Lib" / sdkv / "um" / arch)
+  # executable that is collecting & sending telemetry every time cl/link runs
+  (OUTPUT / "VC/Tools/MSVC" / msvcv / f"bin/Host{arch}/{arch}/vctip.exe").unlink(missing_ok=True)
 
 
 ### setup.bat
