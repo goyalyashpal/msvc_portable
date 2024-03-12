@@ -11,6 +11,7 @@ import tempfile
 import argparse
 import subprocess
 import urllib.request
+import urllib.error
 from pathlib import Path
 
 OUTPUT = Path("msvc") # output folder
@@ -21,14 +22,15 @@ TARGET = "x64" # or x86, arm, arm64
 
 MANIFEST_URL = "https://aka.ms/vs/17/release/channel"
 
+ssl_context = None
 
 def download(url):
-  with urllib.request.urlopen(url) as res:
+  with urllib.request.urlopen(url, context=ssl_context) as res:
     return res.read()
 
 def download_progress(url, check, name, f):
   data = io.BytesIO()
-  with urllib.request.urlopen(url) as res:
+  with urllib.request.urlopen(url, context=ssl_context) as res:
     total = int(res.headers["Content-Length"])
     size = 0
     while True:
@@ -72,7 +74,24 @@ args = ap.parse_args()
 
 ### get main manifest
 
-manifest = json.loads(download(MANIFEST_URL))
+try:
+  manifest = json.loads(download(MANIFEST_URL))
+except urllib.error.URLError as err:
+  import ssl
+  if isinstance(err.args[0], ssl.SSLCertVerificationError):
+    # for more info about Python & issues with Windows certificates see https://stackoverflow.com/a/52074591
+    print("ERROR: ssl certificate verification error")
+    try:
+      import certifi
+    except ModuleNotFoundError:
+      print("ERROR: please install 'certifi' package to use Mozilla certificates")
+      print("ERROR: or update your Windows certs, see instructions here: https://woshub.com/updating-trusted-root-certificates-in-windows-10/#h2_3")
+      exit()
+    print("NOTE: retrying with certifi certificates")
+    ssl_context = ssl.create_default_context(cafile=certifi.where())
+    manifest = json.loads(download(MANIFEST_URL))
+  else:
+    raise
 
 
 ### download VS manifest
