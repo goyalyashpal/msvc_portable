@@ -212,7 +212,8 @@ with tempfile.TemporaryDirectory() as d:
   for pkg in cabs:
     payload = first(sdk_pkg["payloads"], lambda p: p["fileName"] == f"Installers\\{pkg}")
     with open(dst / pkg, "wb") as f:
-      download_progress(payload["url"], payload["sha256"], pkg, f)
+      data = download_progress(payload["url"], payload["sha256"], pkg, f)
+      total_download += len(data)
 
   print("Unpacking msi files...")
 
@@ -282,12 +283,12 @@ for f in ["Catalogs", "DesignTime", f"bin/{sdkv}/chpe", f"Lib/{sdkv}/ucrt_enclav
   shutil.rmtree(OUTPUT / "Windows Kits/10" / f, ignore_errors=True)
 for arch in ["x86", "x64", "arm", "arm64"]:
   if arch != TARGET:
-    shutil.rmtree(OUTPUT / "VC/Tools/MSVC" / msvcv / f"bin/Host{arch}", ignore_errors=True)
-    shutil.rmtree(OUTPUT / "Windows Kits/10/bin" / sdkv / arch)
     shutil.rmtree(OUTPUT / "Windows Kits/10/Lib" / sdkv / "ucrt" / arch)
     shutil.rmtree(OUTPUT / "Windows Kits/10/Lib" / sdkv / "um" / arch)
-  # executable that is collecting & sending telemetry every time cl/link runs
-  (OUTPUT / "VC/Tools/MSVC" / msvcv / f"bin/Host{arch}/{arch}/vctip.exe").unlink(missing_ok=True)
+  if arch != HOST:
+    shutil.rmtree(OUTPUT / "Windows Kits/10/bin" / sdkv / arch)
+# executable that is collecting & sending telemetry every time cl/link runs
+(OUTPUT / "VC/Tools/MSVC" / msvcv / f"bin/Host{HOST}/{TARGET}/vctip.exe").unlink(missing_ok=True)
 
 
 ### setup.bat
