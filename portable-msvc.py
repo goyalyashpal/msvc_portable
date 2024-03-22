@@ -21,6 +21,7 @@ HOST   = "x64" # or x86
 TARGET = "x64" # or x86, arm, arm64
 
 MANIFEST_URL = "https://aka.ms/vs/17/release/channel"
+MANIFEST_PREVIEW_URL = "https://aka.ms/vs/17/pre/channel"
 
 ssl_context = None
 
@@ -65,17 +66,22 @@ def first(items, cond):
 ### parse command-line arguments
 
 ap = argparse.ArgumentParser()
-ap.add_argument("--show-versions", const=True, action="store_const", help="Show available MSVC and Windows SDK versions")
-ap.add_argument("--accept-license", const=True, action="store_const", help="Automatically accept license")
+ap.add_argument("--show-versions", action="store_true", help="Show available MSVC and Windows SDK versions")
+ap.add_argument("--accept-license", action="store_true", help="Automatically accept license")
 ap.add_argument("--msvc-version", help="Get specific MSVC version")
 ap.add_argument("--sdk-version", help="Get specific Windows SDK version")
+ap.add_argument("--preview", action="store_true", help="Use preview channel for Preview versions")
+
 args = ap.parse_args()
+print(args.preview)
 
 
 ### get main manifest
 
+URL = MANIFEST_PREVIEW_URL if args.preview else MANIFEST_URL
+
 try:
-  manifest = json.loads(download(MANIFEST_URL))
+  manifest = json.loads(download(URL))
 except urllib.error.URLError as err:
   import ssl
   if isinstance(err.args[0], ssl.SSLCertVerificationError):
@@ -89,14 +95,15 @@ except urllib.error.URLError as err:
       exit()
     print("NOTE: retrying with certifi certificates")
     ssl_context = ssl.create_default_context(cafile=certifi.where())
-    manifest = json.loads(download(MANIFEST_URL))
+    manifest = json.loads(download(URL))
   else:
     raise
 
-
 ### download VS manifest
 
-vs = first(manifest["channelItems"], lambda x: x["id"] == "Microsoft.VisualStudio.Manifests.VisualStudio")
+ITEM_NAME = "Microsoft.VisualStudio.Manifests.VisualStudioPreview" if args.preview else "Microsoft.VisualStudio.Manifests.VisualStudio"
+
+vs = first(manifest["channelItems"], lambda x: x["id"] == ITEM_NAME)
 payload = vs["payloads"][0]["url"]
 
 vsmanifest = json.loads(download(payload))
