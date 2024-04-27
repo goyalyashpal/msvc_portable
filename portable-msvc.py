@@ -3,6 +3,7 @@
 import io
 import os
 import sys
+import stat
 import json
 import shutil
 import hashlib
@@ -10,11 +11,12 @@ import zipfile
 import tempfile
 import argparse
 import subprocess
-import urllib.request
 import urllib.error
+import urllib.request
 from pathlib import Path
 
-OUTPUT = Path("msvc") # output folder
+OUTPUT = Path("msvc")        # output folder
+DOWNLOADS = Path("downloads") # temporary download files
 
 # other architectures may work or may not - not really tested
 HOST   = "x64" # or x86
@@ -29,26 +31,38 @@ def download(url):
   with urllib.request.urlopen(url, context=ssl_context) as res:
     return res.read()
 
-def download_progress(url, check, name, f):
-  data = io.BytesIO()
-  with urllib.request.urlopen(url, context=ssl_context) as res:
-    total = int(res.headers["Content-Length"])
-    size = 0
-    while True:
-      block = res.read(1<<20)
-      if not block:
-        break
-      f.write(block)
-      data.write(block)
-      size += len(block)
-      perc = size * 100 // total
-      print(f"\r{name} ... {perc}%", end="")
-  print()
-  data = data.getvalue()
-  digest = hashlib.sha256(data).hexdigest()
-  if check.lower() != digest:
-    exit(f"Hash mismatch for f{pkg}")
-  return data
+total_download = 0
+
+def download_progress(url, check, name, filename):
+  fpath = DOWNLOADS / filename
+  if fpath.exists():
+    data = fpath.read_bytes()
+    if hashlib.sha256(data).hexdigest() == check.lower():
+      print(f"\r{name} ... OK")
+      return data
+
+  global total_download
+  with fpath.open("wb") as f:
+    data = io.BytesIO()
+    with urllib.request.urlopen(url, context=ssl_context) as res:
+      total = int(res.headers["Content-Length"])
+      size = 0
+      while True:
+        block = res.read(1<<20)
+        if not block:
+          break
+        f.write(block)
+        data.write(block)
+        size += len(block)
+        perc = size * 100 // total
+        print(f"\r{name} ... {perc}%", end="")
+    print()
+    data = data.getvalue()
+    digest = hashlib.sha256(data).hexdigest()
+    if check.lower() != digest:
+      exit(f"Hash mismatch for f{pkg}")
+    total_download += len(data)
+    return data
 
 # super crappy msi format parser just to find required .cab files
 def get_msi_cabs(msi):
@@ -73,7 +87,6 @@ ap.add_argument("--sdk-version", help="Get specific Windows SDK version")
 ap.add_argument("--preview", action="store_true", help="Use preview channel for Preview versions")
 
 args = ap.parse_args()
-print(args.preview)
 
 
 ### get main manifest
@@ -163,7 +176,8 @@ if not args.accept_license:
     exit(0)
 
 OUTPUT.mkdir(exist_ok=True)
-total_download = 0
+DOWNLOADS.mkdir(exist_ok=True)
+
 
 ### download MSVC
 
@@ -188,15 +202,14 @@ msvc_packages = [
 for pkg in msvc_packages:
   p = first(packages[pkg], lambda p: p.get("language") in (None, "en-US"))
   for payload in p["payloads"]:
-    with tempfile.TemporaryFile() as f:
-      data = download_progress(payload["url"], payload["sha256"], pkg, f)
-      total_download += len(data)
-      with zipfile.ZipFile(f) as z:
-        for name in z.namelist():
-          if name.startswith("Contents/"):
-            out = OUTPUT / Path(name).relative_to("Contents")
-            out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_bytes(z.read(name))
+    filename = payload["fileName"]
+    download_progress(payload["url"], payload["sha256"], pkg, filename)
+    with zipfile.ZipFile(DOWNLOADS / filename) as z:
+      for name in z.namelist():
+        if name.startswith("Contents/"):
+          out = OUTPUT / Path(name).relative_to("Contents")
+          out.parent.mkdir(parents=True, exist_ok=True)
+          out.write_bytes(z.read(name))
 
 
 ### download Windows SDK
@@ -228,18 +241,14 @@ with tempfile.TemporaryDirectory() as d:
   # download msi files
   for pkg in sdk_packages:
     payload = first(sdk_pkg["payloads"], lambda p: p["fileName"] == f"Installers\\{pkg}")
-    msi.append(dst / pkg)
-    with open(dst / pkg, "wb") as f:
-      data = download_progress(payload["url"], payload["sha256"], pkg, f)
-      total_download += len(data)
-      cabs += list(get_msi_cabs(data))
+    msi.append(DOWNLOADS / pkg)
+    data = download_progress(payload["url"], payload["sha256"], pkg, pkg)
+    cabs += list(get_msi_cabs(data))
 
   # download .cab files
   for pkg in cabs:
     payload = first(sdk_pkg["payloads"], lambda p: p["fileName"] == f"Installers\\{pkg}")
-    with open(dst / pkg, "wb") as f:
-      data = download_progress(payload["url"], payload["sha256"], pkg, f)
-      total_download += len(data)
+    download_progress(payload["url"], payload["sha256"], pkg, pkg)
 
   print("Unpacking msi files...")
 
@@ -258,44 +267,49 @@ sdkv = list((OUTPUT / "Windows Kits/10/bin").glob("*"))[0].name
 
 dst = OUTPUT / "VC/Tools/MSVC" / msvcv / f"bin/Host{HOST}/{TARGET}"
 
-with tempfile.TemporaryDirectory() as d:
-  d = Path(d)
-  pkg = "microsoft.visualcpp.runtimedebug.14"
-  dbg = first(packages[pkg], lambda p: p["chip"] == HOST)
-  for payload in dbg["payloads"]:
-    name = payload["fileName"]
-    with open(d / name, "wb") as f:
-      data = download_progress(payload["url"], payload["sha256"], f"{pkg}/{name}", f)
-      total_download += len(data)
-  msi = d / first(dbg["payloads"], lambda p: p["fileName"].endswith(".msi"))["fileName"]
+DOWNLOAD_FOLDER = Path("crtd")
+(DOWNLOADS / DOWNLOAD_FOLDER).mkdir(exist_ok=True)
 
-  with tempfile.TemporaryDirectory() as d2:
-    subprocess.check_call(["msiexec.exe", "/a", str(msi), "/quiet", "/qn", f"TARGETDIR={d2}"])
-    for f in first(Path(d2).glob("System*"), lambda x: True).iterdir():
-      f.replace(dst / f.name)
+pkg = "microsoft.visualcpp.runtimedebug.14"
+dbg = first(packages[pkg], lambda p: p["chip"] == HOST)
+for payload in dbg["payloads"]:
+  name = payload["fileName"]
+  download_progress(payload["url"], payload["sha256"], name, DOWNLOAD_FOLDER / name)
+
+msi = DOWNLOADS / DOWNLOAD_FOLDER / first(dbg["payloads"], lambda p: p["fileName"].endswith(".msi"))["fileName"]
+
+with tempfile.TemporaryDirectory() as d2:
+  subprocess.check_call(["msiexec.exe", "/a", str(msi), "/quiet", "/qn", f"TARGETDIR={d2}"])
+  for f in first(Path(d2).glob("System*"), lambda x: True).iterdir():
+    f.replace(dst / f.name)
+
 
 # download DIA SDK and put msdia140.dll file into MSVC folder
 
-with tempfile.TemporaryDirectory() as d:
-  d = Path(d)
-  pkg = "microsoft.visualc.140.dia.sdk.msi"
-  dia = packages[pkg][0]
-  for payload in dia["payloads"]:
-    name = payload["fileName"]
-    with open(d / name, "wb") as f:
-      data = download_progress(payload["url"], payload["sha256"], f"{pkg}/{name}", f)
-      total_download += len(data)
-  msi = d / first(dia["payloads"], lambda p: p["fileName"].endswith(".msi"))["fileName"]
+DOWNLOAD_FOLDER = Path("dia")
+(DOWNLOADS / DOWNLOAD_FOLDER).mkdir(exist_ok=True)
 
-  with tempfile.TemporaryDirectory() as d2:
-    subprocess.check_call(["msiexec.exe", "/a", str(msi), "/quiet", "/qn", f"TARGETDIR={d2}"])
+pkg = "microsoft.visualc.140.dia.sdk.msi"
+dia = packages[pkg][0]
+for payload in dia["payloads"]:
+  name = payload["fileName"]
+  download_progress(payload["url"], payload["sha256"], name, DOWNLOAD_FOLDER / name)
 
-    if HOST == "x86": msdia = "msdia140.dll"
-    elif HOST == "x64": msdia = "amd64/msdia140.dll"
-    else: exit("unknown")
+msi = DOWNLOADS / DOWNLOAD_FOLDER / first(dia["payloads"], lambda p: p["fileName"].endswith(".msi"))["fileName"]
 
-    src = Path(d2) / "Program Files" / "Microsoft Visual Studio 14.0" / "DIA SDK" / "bin" / msdia
-    src.replace(dst / "msdia140.dll")
+with tempfile.TemporaryDirectory(dir=DOWNLOADS) as d2:
+  subprocess.check_call(["msiexec.exe", "/a", str(msi), "/quiet", "/qn", f"TARGETDIR={d2}"])
+
+  if HOST == "x86": msdia = "msdia140.dll"
+  elif HOST == "x64": msdia = "amd64/msdia140.dll"
+  else: exit("unknown")
+
+  # remove read-only attribute
+  target = dst / "msdia140.dll"
+  target.chmod(stat.S_IWRITE)
+
+  src = Path(d2) / "Program Files/Microsoft Visual Studio 14.0/DIA SDK/bin" / msdia
+  src.replace(target)
 
 
 ### cleanup
@@ -312,7 +326,9 @@ for arch in ["x86", "x64", "arm", "arm64"]:
     shutil.rmtree(OUTPUT / "Windows Kits/10/Lib" / sdkv / "ucrt" / arch)
     shutil.rmtree(OUTPUT / "Windows Kits/10/Lib" / sdkv / "um" / arch)
   if arch != HOST:
+    shutil.rmtree(OUTPUT / "VC/Tools/MSVC" / msvcv / f"bin/Host{arch}", ignore_errors=True)
     shutil.rmtree(OUTPUT / "Windows Kits/10/bin" / sdkv / arch)
+
 # executable that is collecting & sending telemetry every time cl/link runs
 (OUTPUT / "VC/Tools/MSVC" / msvcv / f"bin/Host{HOST}/{TARGET}/vctip.exe").unlink(missing_ok=True)
 
