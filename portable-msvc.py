@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+# Imports {{{1
 import io
 import os
 import sys
@@ -14,7 +15,9 @@ import subprocess
 import urllib.error
 import urllib.request
 from pathlib import Path
+# }}}1
 
+# Global vars {{{1
 OUTPUT = Path("msvc")        # output folder
 DOWNLOADS = Path("downloads") # temporary download files
 
@@ -26,12 +29,14 @@ MANIFEST_URL = "https://aka.ms/vs/17/release/channel"
 MANIFEST_PREVIEW_URL = "https://aka.ms/vs/17/pre/channel"
 
 ssl_context = None
+total_download = 0
+# }}}1
 
+# Functions {{{1
 def download(url):
   with urllib.request.urlopen(url, context=ssl_context) as res:
     return res.read()
 
-total_download = 0
 
 def download_progress(url, check, name, filename):
   fpath = DOWNLOADS / filename
@@ -64,6 +69,7 @@ def download_progress(url, check, name, filename):
     total_download += len(data)
     return data
 
+
 # super crappy msi format parser just to find required .cab files
 def get_msi_cabs(msi):
   index = 0
@@ -73,11 +79,14 @@ def get_msi_cabs(msi):
       return
     yield msi[index-32:index+4].decode("ascii")
 
+
 def first(items, cond):
   return next(item for item in items if cond(item))
-  
 
-### parse command-line arguments
+
+# }}}1
+
+### parse command-line arguments {{{1
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--show-versions", action="store_true", help="Show available MSVC and Windows SDK versions")
@@ -88,8 +97,10 @@ ap.add_argument("--preview", action="store_true", help="Use preview channel for 
 
 args = ap.parse_args()
 
+# }}}1
 
-### get main manifest
+
+### get main manifest {{{1
 
 URL = MANIFEST_PREVIEW_URL if args.preview else MANIFEST_URL
 
@@ -112,7 +123,9 @@ except urllib.error.URLError as err:
   else:
     raise
 
-### download VS manifest
+# }}}1
+
+### download VS manifest {{{1
 
 ITEM_NAME = "Microsoft.VisualStudio.Manifests.VisualStudioPreview" if args.preview else "Microsoft.VisualStudio.Manifests.VisualStudio"
 
@@ -121,8 +134,10 @@ payload = vs["payloads"][0]["url"]
 
 vsmanifest = json.loads(download(payload))
 
+# }}}1
 
-### find MSVC & WinSDK versions
+
+### find MSVC & WinSDK versions {{{1
 
 packages = {}
 for p in vsmanifest["packages"]:
@@ -163,8 +178,9 @@ else:
 
 print(f"Downloading MSVC v{msvc_ver} and Windows SDK v{sdk_ver}")
 
+# }}}1
 
-### agree to license
+### agree to license {{{1
 
 tools = first(manifest["channelItems"], lambda x: x["id"] == "Microsoft.VisualStudio.Product.BuildTools")
 resource = first(tools["localizedResources"], lambda x: x["language"] == "en-us")
@@ -175,12 +191,15 @@ if not args.accept_license:
   if not accept or accept[0].lower() != "y":
     exit(0)
 
+# }}}1
+
 OUTPUT.mkdir(exist_ok=True)
 DOWNLOADS.mkdir(exist_ok=True)
 
 
-### download MSVC
+### download MSVC {{{1
 
+# {{{
 msvc_packages = [
   # MSVC binaries
   f"microsoft.vc.{msvc_ver}.tools.host{HOST}.target{TARGET}.base",
@@ -198,7 +217,9 @@ msvc_packages = [
   # MSVC redist
   #f"microsoft.vc.{msvc_ver}.crt.redist.x64.base",
 ]
+# }}}
 
+# {{{
 for pkg in msvc_packages:
   p = first(packages[pkg], lambda p: p.get("language") in (None, "en-US"))
   for payload in p["payloads"]:
@@ -210,10 +231,13 @@ for pkg in msvc_packages:
           out = OUTPUT / Path(name).relative_to("Contents")
           out.parent.mkdir(parents=True, exist_ok=True)
           out.write_bytes(z.read(name))
+# }}}
 
+# }}}1
 
-### download Windows SDK
+### download Windows SDK {{{1
 
+# {{{
 sdk_packages = [
   # Windows SDK tools (like rc.exe & mt.exe)
   f"Windows SDK for Windows Store Apps Tools-x86_en-us.msi",
@@ -228,6 +252,8 @@ sdk_packages = [
   # CRT redist
   #"Universal CRT Redistributable-x86_en-us.msi",
 ]
+# }}}
+
 
 with tempfile.TemporaryDirectory() as d:
   dst = Path(d)
@@ -238,24 +264,28 @@ with tempfile.TemporaryDirectory() as d:
   msi = []
   cabs = []
 
-  # download msi files
+  # download msi files{{{
   for pkg in sdk_packages:
     payload = first(sdk_pkg["payloads"], lambda p: p["fileName"] == f"Installers\\{pkg}")
     msi.append(DOWNLOADS / pkg)
     data = download_progress(payload["url"], payload["sha256"], pkg, pkg)
     cabs += list(get_msi_cabs(data))
+  # }}}
 
-  # download .cab files
+  # download .cab files{{{
   for pkg in cabs:
     payload = first(sdk_pkg["payloads"], lambda p: p["fileName"] == f"Installers\\{pkg}")
     download_progress(payload["url"], payload["sha256"], pkg, pkg)
+  # }}}
 
-  print("Unpacking msi files...")
+  print("Unpacking msi files...")  # {{{
 
   # run msi installers
   for m in msi:
     subprocess.check_call(["msiexec.exe", "/a", m, "/quiet", "/qn", f"TARGETDIR={OUTPUT.resolve()}"])
+  # }}}
 
+# }}}1
 
 ### versions
 
@@ -263,7 +293,7 @@ msvcv = list((OUTPUT / "VC/Tools/MSVC").glob("*"))[0].name
 sdkv = list((OUTPUT / "Windows Kits/10/bin").glob("*"))[0].name
 
 
-# place debug CRT runtime files into MSVC folder (not what real Visual Studio installer does... but is reasonable)
+# place debug CRT runtime files into MSVC folder (not what real Visual Studio installer does... but is reasonable) {{{1
 
 dst = OUTPUT / "VC/Tools/MSVC" / msvcv / f"bin/Host{HOST}/{TARGET}"
 
@@ -283,8 +313,9 @@ with tempfile.TemporaryDirectory() as d2:
   for f in first(Path(d2).glob("System*"), lambda x: True).iterdir():
     f.replace(dst / f.name)
 
+# }}}1
 
-# download DIA SDK and put msdia140.dll file into MSVC folder
+# download DIA SDK and put msdia140.dll file into MSVC folder {{{1
 
 DOWNLOAD_FOLDER = Path("dia")
 (DOWNLOADS / DOWNLOAD_FOLDER).mkdir(exist_ok=True)
@@ -311,8 +342,9 @@ with tempfile.TemporaryDirectory(dir=DOWNLOADS) as d2:
   src = Path(d2) / "Program Files/Microsoft Visual Studio 14.0/DIA SDK/bin" / msdia
   src.replace(target)
 
+# }}}1
 
-### cleanup
+### cleanup {{{1
 
 shutil.rmtree(OUTPUT / "Common7", ignore_errors=True)
 for f in ["Auxiliary", f"lib/{TARGET}/store", f"lib/{TARGET}/uwp"]:
@@ -332,8 +364,9 @@ for arch in ["x86", "x64", "arm", "arm64"]:
 # executable that is collecting & sending telemetry every time cl/link runs
 (OUTPUT / "VC/Tools/MSVC" / msvcv / f"bin/Host{HOST}/{TARGET}/vctip.exe").unlink(missing_ok=True)
 
+# }}}1
 
-### setup.bat
+### setup.bat {{{1
 
 SETUP = f"""@echo off
 
@@ -356,6 +389,8 @@ set LIB=%MSVC_ROOT%\\lib\\%MSVC_ARCH%;%SDK_LIBS%\\ucrt\\%SDK_ARCH%;%SDK_LIBS%\\u
 """
 
 (OUTPUT / "setup.bat").write_text(SETUP)
+
+# }}}1
 
 print(f"Total downloaded: {total_download>>20} MB")
 print("Done!")
